@@ -1,0 +1,128 @@
+ujson (4.2.0-1) unstable; urgency=medium
+
+  [ Debian Janitor ]
+  * Bump debhelper from old 12 to 13.
+  * Update standards version to 4.5.1, no changes needed.
+
+  [ Mo Zhou ]
+  * New upstream version 4.2.0
+  * Refresh the existing patches.
+  * Update dh_installdocs overrides for README.md.
+  * Add missing dependencies on Python3.
+
+ -- Mo Zhou <lumin@debian.org>  Fri, 12 Nov 2021 12:51:27 -0500
+
+ujson (4.0.2-1) unstable; urgency=medium
+
+  [ Debian Janitor ]
+  * Apply multi-arch hints.
+    + python3-ujson: Add Multi-Arch: same.
+
+  [ Mo Zhou ]
+  * New upstream version 4.0.2
+
+ -- Mo Zhou <lumin@debian.org>  Wed, 17 Feb 2021 14:01:10 +0800
+
+ujson (4.0.1-1) unstable; urgency=medium
+
+  [ Debian Janitor ]
+  * Wrap long lines in changelog entries: 1.35-3.
+  * Bump debhelper from old 9 to 12.
+  * Set upstream metadata fields: Bug-Database, Bug-Submit, Repository,
+    Repository-Browse.
+
+  [ Ondřej Nový ]
+  * d/control: Update Maintainer field with new Debian Python Team
+    contact address.
+  * d/control: Update Vcs-* fields with new Debian Python Team Salsa
+    layout.
+
+  [ Mo Zhou ]
+  * Add deps/ to Files-Excluded field of d/copyright.
+  * New upstream version 4.0.1
+  * Update upstream homepage.
+  * Apply wrap-and-sort.
+  * Update my mail address.
+  * Reflect changes in setup.py after stripping embedded double-conversion.
+  * Add missing Build-Depends incl. libdouble-conversion-dev.
+  * d/rules: filename of upstream test script has been changed.
+  * Deprecate old-fashioned -dbg package in favor of auto -dbgsym packages.
+  * Specify Rules-Requires-Root: no.
+  * Bump Standards-Version to 4.5.0.
+  * Migrate to pytest testing and remove unnecessary 2to3 dependency.
+
+ -- Mo Zhou <lumin@debian.org>  Thu, 15 Oct 2020 10:17:55 +0800
+
+ujson (1.35-4) unstable; urgency=medium
+
+  [ Ondřej Nový ]
+  * Convert git repository from git-dpm to gbp layout
+  * Use debhelper-compat instead of debian/compat.
+
+  [ Sandro Tosi ]
+  * Drop python2 support; Closes: #938748
+
+ -- Sandro Tosi <morph@debian.org>  Thu, 12 Dec 2019 22:00:45 -0500
+
+ujson (1.35-3) unstable; urgency=medium
+
+  [ Ondřej Nový ]
+  * d/control: Set Vcs-* to salsa.debian.org
+  * d/copyright: Use https protocol in Format field
+  * d/watch: Use https protocol
+
+  [ Chris Lamb ]
+  * debian/copyright: Use HTTPS for Source field.
+
+  [ Mo Zhou ]
+  * Package adopted. Update Maintainers and Uploaders. (Closes: #888233)
+    + Move Python Team to Maintainers.
+    - Remove Sandro Tosi <morph@debian.org>, who requested for adoption.
+    + Add myself to Uploaders.
+  * Sort B-D list and add the missing B-D python-unittest2.
+  * BUGS: Annotate a known bug.
+  * Bump Standards-Version to 4.1.4 (no change).
+  * copyright: Rename BSD to BSD-3-Clause
+    (invalid-short-name-in-dep5-copyright).
+  * Override obsolete-url-in-packaging. The URL is a note in copyright.
+  * rules: Inject hardening flags.
+
+ -- Mo Zhou <cdluminate@gmail.com>  Sat, 02 Jun 2018 06:30:23 +0000
+
+ujson (1.35-2) unstable; urgency=medium
+
+  * debian/control
+    - add 2to3 to b-d, now a separate package; Closes: #887448
+    - bump Standards-Version to 4.1.3
+    - remove prio: extra from -dbg packages
+  * debian/copyright
+    - extend packaging copyright years
+
+ -- Sandro Tosi <morph@debian.org>  Tue, 23 Jan 2018 23:12:05 -0500
+
+ujson (1.35-1) unstable; urgency=medium
+
+  [ Sandro Tosi ]
+  * New upstream release: Closes: #792610, #827209
+  * debian/control
+    - set Vcs-* fields
+    - set team as uploaders
+    - bump Standards-Version to 3.9.8 (no changes needed)
+    - add six, pytz to b-d, needed by tests
+  * debian/copyright
+    - extend packaging copyright years
+    - updated upstream copyright years
+  * debian/patches/0002-run-test-more-verbosely.patch
+    - run tests more verbosely
+
+  [ Ondřej Nový ]
+  * Fixed homepage (https)
+  * Fixed VCS URL (https)
+
+ -- Sandro Tosi <morph@debian.org>  Tue, 14 Jun 2016 20:24:42 +0100
+
+ujson (1.33-1) unstable; urgency=low
+
+  * Initial release (Closes: #790447)
+
+ -- Sandro Tosi <morph@debian.org>  Mon, 29 Jun 2015 11:37:26 -0400

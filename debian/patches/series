@@ -1,0 +1,3 @@
+#0001-dont-remove-build-dir.patch
+#0002-run-test-more-verbosely.patch
+setup-py-strip-double-conversion.patch

@@ -1,0 +1,31 @@
+#!/usr/bin/make -f
+export DEB_BUILD_MAINT_OPTIONS = hardening=+all
+
+PYTHON3=$(shell py3versions -r)
+
+%:
+	dh $@ --with python3 --buildsystem=pybuild
+
+override_dh_auto_build:
+	set -e; \
+	for python in $(PYTHON3); do \
+		$$python setup.py build; \
+	done
+
+override_dh_install:
+	set -e; \
+	for python in $(PYTHON3); do \
+		$$python     setup.py install --install-layout=deb --root=$(CURDIR)/debian/python3-ujson; \
+	done
+
+override_dh_installdocs:
+	dh_installdocs
+	dh_installdocs README.md
+
+override_dh_auto_test:
+ifeq ($(filter nocheck,$(DEB_BUILD_OPTIONS)),)
+	-for python in $(PYTHON3); do \
+		LIB=$$($$python -c "from distutils.command.build import build ; from distutils.core import Distribution ; b = build(Distribution()) ; b.finalize_options() ; print (b.build_platlib)") ; \
+		PYTHONPATH=$(CURDIR)/$$LIB $$python -m pytest -v ; \
+	done
+endif
