@@ -1,5 +1,7 @@
 #!/usr/bin/make -f
 export DEB_BUILD_MAINT_OPTIONS = hardening=+all
+export UJSON_BUILD_DC_INCLUDES = /usr/include/double-conversion
+export UJSON_BUILD_DC_LIBS     = -ldouble-conversion
 
 PYTHON3=$(shell py3versions -r)
 
@@ -25,7 +27,7 @@ override_dh_installdocs:
 override_dh_auto_test:
 ifeq ($(filter nocheck,$(DEB_BUILD_OPTIONS)),)
 	-for python in $(PYTHON3); do \
-		LIB=$$($$python -c "from distutils.command.build import build ; from distutils.core import Distribution ; b = build(Distribution()) ; b.finalize_options() ; print (b.build_platlib)") ; \
-		PYTHONPATH=$(CURDIR)/$$LIB $$python -m pytest -v ; \
+		LIB=$$(find . | grep 'ujson.*.so' | xargs dirname | paste -sd ':' - ); \
+		PYTHONPATH=$$LIB $$python -m pytest -v ; \
 	done
 endif
