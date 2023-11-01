@@ -38,6 +38,7 @@ http://www.opensource.apple.com/source/tcl/tcl-14/tcl/license.terms
 
 #include <Python.h>
 #include "version.h"
+#include "ujson.h"
 
 /* objToJSON */
 PyObject* objToJSON(PyObject* self, PyObject *args, PyObject *kwargs);
@@ -51,11 +52,13 @@ PyObject* objToJSONFile(PyObject* self, PyObject *args, PyObject *kwargs);
 /* JSONFileToObj */
 PyObject* JSONFileToObj(PyObject* self, PyObject *args, PyObject *kwargs);
 
+PyObject* JSONDecodeError;
+
 
 #define ENCODER_HELP_TEXT "Use ensure_ascii=false to output UTF-8. " \
     "Set encode_html_chars=True to encode < > & as unicode escape sequences. "\
     "Set escape_forward_slashes=False to prevent escaping / characters." \
-    "Set allow_nan=False to raise an exception when NaN or Inf would be serialized." \
+    "Set allow_nan=False to raise an exception when NaN or Infinity would be serialized." \
     "Set reject_bytes=True to raise TypeError on bytes."
 
 static PyMethodDef ujsonMethods[] = {
@@ -187,6 +190,16 @@ PyMODINIT_FUNC PyInit_ujson(void)
   else
     PyErr_Clear();
 #endif
+
+  JSONDecodeError = PyErr_NewException("ujson.JSONDecodeError", PyExc_ValueError, NULL);
+  Py_XINCREF(JSONDecodeError);
+  if (PyModule_AddObject(module, "JSONDecodeError", JSONDecodeError) < 0)
+  {
+    Py_XDECREF(JSONDecodeError);
+    Py_CLEAR(JSONDecodeError);
+    Py_DECREF(module);
+    return NULL;
+  }
 
   return module;
 }

@@ -54,10 +54,6 @@ tree doesn't have cyclic references.
 #define __ULTRAJSON_H__
 
 #include <stdio.h>
-#include <wchar.h>
-
-// Don't output any extra whitespaces when encoding
-#define JSON_NO_EXTRA_WHITESPACE
 
 // Max decimals to encode double floating point numbers with
 #ifndef JSON_DOUBLE_MAX_DECIMALS
@@ -166,6 +162,9 @@ enum JSTYPES
   JT_ARRAY,     // Array structure
   JT_OBJECT,    // Key/Value structure
   JT_INVALID,   // Internal, do not return nor expect
+  JT_NAN,       // Not A Number
+  JT_POS_INF,   // Positive infinity
+  JT_NEG_INF,   // Negative infinity
 };
 
 typedef void * JSOBJ;
@@ -198,7 +197,6 @@ typedef struct __JSONObjectEncoder
   const char *(*getStringValue)(JSOBJ obj, JSONTypeContext *tc, size_t *_outLen);
   JSINT64 (*getLongValue)(JSOBJ obj, JSONTypeContext *tc);
   JSUINT64 (*getUnsignedLongValue)(JSOBJ obj, JSONTypeContext *tc);
-  JSINT32 (*getIntValue)(JSOBJ obj, JSONTypeContext *tc);
   double (*getDoubleValue)(JSOBJ obj, JSONTypeContext *tc);
 
   /*
@@ -271,6 +269,13 @@ typedef struct __JSONObjectEncoder
   int rejectBytes;
 
   /*
+  Configuration for item and key separators, e.g. "," and ":" for a compact representation or ", " and ": " to match the Python standard library's defaults. */
+  size_t itemSeparatorLength;
+  const char *itemSeparatorChars;
+  size_t keySeparatorLength;
+  const char *keySeparatorChars;
+
+  /*
   Private pointer to be used by the caller. Passed as encoder_prv in JSONTypeContext */
   void *prv;
 
@@ -301,9 +306,10 @@ obj - An anonymous type representing the object
 enc - Function definitions for querying JSOBJ type
 buffer - Preallocated buffer to store result in. If NULL function allocates own buffer
 cbBuffer - Length of buffer (ignored if buffer is NULL)
+outLen - Will store the length of the encoded string
 
 Returns:
-Encoded JSON object as a null terminated char string.
+Encoded JSON object as a char string.
 
 NOTE:
 If the supplied buffer wasn't enough to hold the result the function will allocate a new buffer.
@@ -311,22 +317,28 @@ Life cycle of the provided buffer must still be handled by caller.
 
 If the return value doesn't equal the specified buffer caller must release the memory using
 JSONObjectEncoder.free or free() as specified when calling this function.
+
+If an error occurs during encoding, NULL is returned and no outLen is stored.
 */
-EXPORTFUNCTION char *JSON_EncodeObject(JSOBJ obj, JSONObjectEncoder *enc, char *buffer, size_t cbBuffer);
+EXPORTFUNCTION char *JSON_EncodeObject(JSOBJ obj, JSONObjectEncoder *enc, char *buffer, size_t cbBuffer, size_t *outLen);
 
 typedef struct __JSONObjectDecoder
 {
-  JSOBJ (*newString)(void *prv, wchar_t *start, wchar_t *end);
+  JSOBJ (*newString)(void *prv, JSUINT32 *start, JSUINT32 *end);
   void (*objectAddKey)(void *prv, JSOBJ obj, JSOBJ name, JSOBJ value);
   void (*arrayAddItem)(void *prv, JSOBJ obj, JSOBJ value);
   JSOBJ (*newTrue)(void *prv);
   JSOBJ (*newFalse)(void *prv);
   JSOBJ (*newNull)(void *prv);
+  JSOBJ (*newNaN)(void *prv);
+  JSOBJ (*newPosInf)(void *prv);
+  JSOBJ (*newNegInf)(void *prv);
   JSOBJ (*newObject)(void *prv);
   JSOBJ (*newArray)(void *prv);
   JSOBJ (*newInt)(void *prv, JSINT32 value);
   JSOBJ (*newLong)(void *prv, JSINT64 value);
   JSOBJ (*newUnsignedLong)(void *prv, JSUINT64 value);
+  JSOBJ (*newIntegerFromString)(void *prv, char *value, size_t length);
   JSOBJ (*newDouble)(void *prv, double value);
   void (*releaseObject)(void *prv, JSOBJ obj);
   JSPFN_MALLOC malloc;

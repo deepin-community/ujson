@@ -1,12 +1,16 @@
 import datetime as dt
 import decimal
+import enum
 import io
 import json
 import math
+import os.path
 import re
+import subprocess
 import sys
 import uuid
 from collections import OrderedDict
+from pathlib import Path
 
 import pytest
 import ujson
@@ -238,14 +242,15 @@ def test_encode_dict_values_ref_counting():
 @pytest.mark.skipif(
     hasattr(sys, "pypy_version_info"), reason="PyPy uses incompatible GC"
 )
-def test_encode_dict_key_ref_counting():
+@pytest.mark.parametrize("key", ["key", b"key", 1, True, None])
+@pytest.mark.parametrize("sort_keys", [False, True])
+def test_encode_dict_key_ref_counting(key, sort_keys):
     import gc
 
     gc.collect()
-    key = "key"
     data = {key: "abc"}
     ref_count = sys.getrefcount(key)
-    ujson.dumps(data)
+    ujson.dumps(data, sort_keys=sort_keys)
     assert ref_count == sys.getrefcount(key)
 
 
@@ -396,11 +401,11 @@ def test_decode_number_with32bit_sign_bit():
     # sign bit set (2**31 <= x < 2**32) are decoded properly.
     docs = (
         '{"id": 3590016419}',
-        '{"id": %s}' % 2 ** 31,
-        '{"id": %s}' % 2 ** 32,
-        '{"id": %s}' % ((2 ** 32) - 1),
+        '{"id": %s}' % 2**31,
+        '{"id": %s}' % 2**32,
+        '{"id": %s}' % ((2**32) - 1),
     )
-    results = (3590016419, 2 ** 31, 2 ** 32, 2 ** 32 - 1)
+    results = (3590016419, 2**31, 2**32, 2**32 - 1)
     for doc, result in zip(docs, results):
         assert ujson.decode(doc)["id"] == result
 
@@ -496,10 +501,49 @@ def test_decode_array_empty():
     assert [] == obj
 
 
-def test_encoding_invalid_unicode_character():
-    s = "\udc7f"
-    with pytest.raises(UnicodeEncodeError):
-        ujson.dumps(s)
+def test_encode_surrogate_characters():
+    assert ujson.dumps("\udc7f") == r'"\udc7f"'
+    out = r'{"\ud800":"\udfff"}'
+    assert ujson.dumps({"\ud800": "\udfff"}) == out
+    assert ujson.dumps({"\ud800": "\udfff"}, sort_keys=True) == out
+    o = {b"\xed\xa0\x80": b"\xed\xbf\xbf"}
+    assert ujson.dumps(o, reject_bytes=False) == out
+    assert ujson.dumps(o, reject_bytes=False, sort_keys=True) == out
+
+    out2 = '{"\ud800":"\udfff"}'
+    assert ujson.dumps({"\ud800": "\udfff"}, ensure_ascii=False) == out2
+    assert ujson.dumps({"\ud800": "\udfff"}, ensure_ascii=False, sort_keys=True) == out2
+
+
+@pytest.mark.parametrize(
+    "test_input, expected",
+    [
+        # Normal cases
+        (r'"\uD83D\uDCA9"', "\U0001F4A9"),
+        (r'"a\uD83D\uDCA9b"', "a\U0001F4A9b"),
+        # Unpaired surrogates
+        (r'"\uD800"', "\uD800"),
+        (r'"a\uD800b"', "a\uD800b"),
+        (r'"\uDEAD"', "\uDEAD"),
+        (r'"a\uDEADb"', "a\uDEADb"),
+        (r'"\uD83D\uD83D\uDCA9"', "\uD83D\U0001F4A9"),
+        (r'"\uDCA9\uD83D\uDCA9"', "\uDCA9\U0001F4A9"),
+        (r'"\uD83D\uDCA9\uD83D"', "\U0001F4A9\uD83D"),
+        (r'"\uD83D\uDCA9\uDCA9"', "\U0001F4A9\uDCA9"),
+        (r'"\uD83D \uDCA9"', "\uD83D \uDCA9"),
+        # No decoding of actual surrogate characters (rather than escaped ones)
+        ('"\uD800"', "\uD800"),
+        ('"\uDEAD"', "\uDEAD"),
+        ('"\uD800a\uDEAD"', "\uD800a\uDEAD"),
+        ('"\uD83D\uDCA9"', "\uD83D\uDCA9"),
+    ],
+)
+def test_decode_surrogate_characters(test_input, expected):
+    assert ujson.loads(test_input) == expected
+    assert ujson.loads(test_input.encode("utf-8", "surrogatepass")) == expected
+
+    # Ensure that this matches stdlib's behaviour
+    assert json.loads(test_input) == expected
 
 
 def test_sort_keys():
@@ -553,48 +597,69 @@ def test_decode_numeric_int_exp(test_input):
 
 
 @pytest.mark.parametrize(
+    "i",
+    [
+        -(10**25),  # very negative
+        -(2**64),  # too large in magnitude for a uint64
+        -(2**63) - 1,  # too small for a int64
+        2**64,  # too large for a uint64
+        10**25,  # very positive
+    ],
+)
+@pytest.mark.parametrize("mode", ["encode", "decode"])
+def test_encode_decode_big_int(i, mode):
+    # Test ints that are too large to be represented by a C integer type
+    for python_object in (i, [i], {"i": i}):
+        json_string = json.dumps(python_object, separators=(",", ":"))
+        if mode == "encode":
+            if hasattr(sys, "pypy_version_info"):
+                # https://foss.heptapod.net/pypy/pypy/-/issues/3765
+                pytest.skip("PyPy can't serialise big ints")
+            assert ujson.encode(python_object) == json_string
+            if isinstance(python_object, dict):
+                assert ujson.encode(python_object, sort_keys=True) == json_string
+        else:
+            assert ujson.decode(json_string) == python_object
+
+
+@pytest.mark.parametrize(
     "test_input, expected",
     [
-        ('{{1337:""}}', ValueError),  # broken dict key type leak test
-        ('{{"key":"}', ValueError),  # broken dict leak test
-        ('{{"key":"}', ValueError),  # broken dict leak test
-        ("[[[true", ValueError),  # broken list leak test
+        ('{{1337:""}}', ujson.JSONDecodeError),  # broken dict key type leak test
+        ('{{"key":"}', ujson.JSONDecodeError),  # broken dict leak test
+        ('{{"key":"}', ujson.JSONDecodeError),  # broken dict leak test
+        ("[[[true", ujson.JSONDecodeError),  # broken list leak test
     ],
 )
 def test_decode_range_raises(test_input, expected):
     for x in range(1000):
-        with pytest.raises(ValueError):
+        with pytest.raises(expected):
             ujson.decode(test_input)
 
 
 @pytest.mark.parametrize(
     "test_input, expected",
     [
-        ("fdsa sda v9sa fdsa", ValueError),  # jibberish
-        ("[", ValueError),  # broken array start
-        ("{", ValueError),  # broken object start
-        ("]", ValueError),  # broken array end
-        ("}", ValueError),  # broken object end
-        ('{"one":1,}', ValueError),  # object trailing comma fail
-        ('"TESTING', ValueError),  # string unterminated
-        ('"TESTING\\"', ValueError),  # string bad escape
-        ("tru", ValueError),  # true broken
-        ("fa", ValueError),  # false broken
-        ("n", ValueError),  # null broken
-        ("{{{{31337}}}}", ValueError),  # dict with no key
-        ('{{{{"key"}}}}', ValueError),  # dict with no colon or value
-        ('{{{{"key":}}}}', ValueError),  # dict with no value
-        ("[31337,]", ValueError),  # array trailing comma fail
-        ("[,31337]", ValueError),  # array leading comma fail
-        ("[,]", ValueError),  # array only comma fail
-        ("[]]", ValueError),  # array unmatched bracket fail
-        ("18446744073709551616", ValueError),  # too big value
-        ("-90223372036854775809", ValueError),  # too small value
-        ("18446744073709551616", ValueError),  # very too big value
-        ("-90223372036854775809", ValueError),  # very too small value
-        ("{}\n\t a", ValueError),  # with trailing non whitespaces
-        ("[18446744073709551616]", ValueError),  # array with big int
-        ('{"age", 44}', ValueError),  # read bad object syntax
+        ("fdsa sda v9sa fdsa", ujson.JSONDecodeError),  # gibberish
+        ("[", ujson.JSONDecodeError),  # broken array start
+        ("{", ujson.JSONDecodeError),  # broken object start
+        ("]", ujson.JSONDecodeError),  # broken array end
+        ("}", ujson.JSONDecodeError),  # broken object end
+        ('{"one":1,}', ujson.JSONDecodeError),  # object trailing comma fail
+        ('"TESTING', ujson.JSONDecodeError),  # string unterminated
+        ('"TESTING\\"', ujson.JSONDecodeError),  # string bad escape
+        ("tru", ujson.JSONDecodeError),  # true broken
+        ("fa", ujson.JSONDecodeError),  # false broken
+        ("n", ujson.JSONDecodeError),  # null broken
+        ("{{{{31337}}}}", ujson.JSONDecodeError),  # dict with no key
+        ('{{{{"key"}}}}', ujson.JSONDecodeError),  # dict with no colon or value
+        ('{{{{"key":}}}}', ujson.JSONDecodeError),  # dict with no value
+        ("[31337,]", ujson.JSONDecodeError),  # array trailing comma fail
+        ("[,31337]", ujson.JSONDecodeError),  # array leading comma fail
+        ("[,]", ujson.JSONDecodeError),  # array only comma fail
+        ("[]]", ujson.JSONDecodeError),  # array unmatched bracket fail
+        ("{}\n\t a", ujson.JSONDecodeError),  # with trailing non whitespaces
+        ('{"age", 44}', ujson.JSONDecodeError),  # read bad object syntax
     ],
 )
 def test_decode_raises(test_input, expected):
@@ -605,13 +670,18 @@ def test_decode_raises(test_input, expected):
 @pytest.mark.parametrize(
     "test_input, expected",
     [
-        ("[", ValueError),  # array depth too big
-        ("{", ValueError),  # object depth too big
+        ("[", ujson.JSONDecodeError),  # array depth too big
+        ("{", ujson.JSONDecodeError),  # object depth too big
     ],
 )
 def test_decode_raises_for_long_input(test_input, expected):
     with pytest.raises(expected):
         ujson.decode(test_input * (1024 * 1024))
+
+
+def test_decode_exception_is_value_error():
+    assert issubclass(ujson.JSONDecodeError, ValueError)
+    assert ujson.JSONDecodeError is not ValueError
 
 
 @pytest.mark.parametrize(
@@ -629,8 +699,14 @@ def test_dumps(test_input, expected):
 
 
 class SomeObject:
+    def __init__(self, message, exception=None):
+        self._message = message
+        self._exception = exception
+
     def __repr__(self):
-        return "Some Object"
+        if self._exception:
+            raise self._exception
+        return self._message
 
 
 @pytest.mark.parametrize(
@@ -638,13 +714,16 @@ class SomeObject:
     [
         (set(), TypeError, "set() is not JSON serializable"),
         ({1, 2, 3}, TypeError, "{1, 2, 3} is not JSON serializable"),
-        (SomeObject(), TypeError, "Some Object is not JSON serializable"),
+        (SomeObject("Some Object"), TypeError, "Some Object is not JSON serializable"),
+        (SomeObject("\ud800"), UnicodeEncodeError, None),
+        (SomeObject(None, KeyboardInterrupt), KeyboardInterrupt, None),
     ],
 )
 def test_dumps_raises(test_input, expected_exception, expected_message):
     with pytest.raises(expected_exception) as e:
         ujson.dumps(test_input)
-    assert str(e.value) == expected_message
+    if expected_message:
+        assert str(e.value) == expected_message
 
 
 @pytest.mark.parametrize(
@@ -653,12 +732,83 @@ def test_dumps_raises(test_input, expected_exception, expected_message):
         (float("nan"), OverflowError),
         (float("inf"), OverflowError),
         (-float("inf"), OverflowError),
-        (12839128391289382193812939, OverflowError),
     ],
 )
 def test_encode_raises_allow_nan(test_input, expected_exception):
     with pytest.raises(expected_exception):
         ujson.dumps(test_input, allow_nan=False)
+
+
+def test_nan_inf_support():
+    # Test ported from pandas
+    text = '["a", NaN, "NaN", Infinity, "Infinity", -Infinity, "-Infinity"]'
+    data = ujson.loads(text)
+    expected = [
+        "a",
+        float("nan"),
+        "NaN",
+        float("inf"),
+        "Infinity",
+        -float("inf"),
+        "-Infinity",
+    ]
+    for a, b in zip(data, expected):
+        assert a == b or math.isnan(a) and math.isnan(b)
+
+
+def test_special_singletons():
+    pos_inf = ujson.loads("Infinity")
+    neg_inf = ujson.loads("-Infinity")
+    nan = ujson.loads("NaN")
+    null = ujson.loads("null")
+    assert math.isinf(pos_inf) and pos_inf > 0
+    assert math.isinf(neg_inf) and neg_inf < 0
+    assert math.isnan(nan)
+    assert null is None
+
+
+@pytest.mark.parametrize(
+    "test_input, expected_message",
+    [
+        ("n", "Unexpected character .* 'null'"),
+        ("N", "Unexpected character .*'NaN'"),
+        ("NA", "Unexpected character .* 'NaN'"),
+        ("Na N", "Unexpected character .* 'NaN'"),
+        ("nan", "Unexpected character .* 'null'"),
+        ("none", "Unexpected character .* 'null'"),
+        ("i", "Expected object or value"),
+        ("I", "Unexpected character .* 'Infinity'"),
+        ("Inf", "Unexpected character .* 'Infinity'"),
+        ("InfinitY", "Unexpected character .* 'Infinity'"),
+        ("-i", "Trailing data"),
+        ("-I", "Unexpected character .* '-Infinity'"),
+        ("-Inf", "Unexpected character .* '-Infinity'"),
+        ("-InfinitY", "Unexpected character .* '-Infinity'"),
+        ("- i", "Trailing data"),
+        ("- I", "Trailing data"),
+        ("- Inf", "Trailing data"),
+        ("- InfinitY", "Trailing data"),
+    ],
+)
+def test_incomplete_special_inputs(test_input, expected_message):
+    with pytest.raises(ujson.JSONDecodeError, match=expected_message):
+        ujson.loads(test_input)
+
+
+@pytest.mark.parametrize(
+    "test_input, expected_message",
+    [
+        ("NaNaNaN", "Trailing data"),
+        ("Infinity and Beyond", "Trailing data"),
+        ("-Infinity-and-Beyond", "Trailing data"),
+        ("NaN!", "Trailing data"),
+        ("Infinity!", "Trailing data"),
+        ("-Infinity!", "Trailing data"),
+    ],
+)
+def test_overcomplete_special_inputs(test_input, expected_message):
+    with pytest.raises(ujson.JSONDecodeError, match=expected_message):
+        ujson.loads(test_input)
 
 
 @pytest.mark.parametrize(
@@ -693,8 +843,8 @@ def test_encode_no_assert(test_input):
         (1.0, "1.0"),
         (OrderedDict([(1, 1), (0, 0), (8, 8), (2, 2)]), '{"1":1,"0":0,"8":8,"2":2}'),
         ({"a": float("NaN")}, '{"a":NaN}'),
-        ({"a": float("inf")}, '{"a":Inf}'),
-        ({"a": -float("inf")}, '{"a":-Inf}'),
+        ({"a": float("inf")}, '{"a":Infinity}'),
+        ({"a": -float("inf")}, '{"a":-Infinity}'),
     ],
 )
 def test_encode(test_input, expected):
@@ -863,6 +1013,181 @@ def test_default_function():
     unjsonable_obj = UnjsonableObject()
     with pytest.raises(TypeError, match="maximum recursion depth exceeded"):
         ujson.dumps(unjsonable_obj, default=default)
+
+
+@pytest.mark.parametrize("indent", list(range(65537, 65542)))
+def test_dump_huge_indent(indent):
+    ujson.encode({"a": True}, indent=indent)
+
+
+@pytest.mark.parametrize("first_length", list(range(2, 7)))
+@pytest.mark.parametrize("second_length", list(range(10919, 10924)))
+def test_dump_long_string(first_length, second_length):
+    ujson.dumps(["a" * first_length, "\x00" * second_length])
+
+
+def test_dump_indented_nested_list():
+    a = _a = []
+    for i in range(20):
+        _a.append(list(range(i)))
+        _a = _a[-1]
+        ujson.dumps(a, indent=i)
+
+
+@pytest.mark.parametrize("indent", [0, 1, 2, 4, 5, 8, 49])
+def test_issue_334(indent):
+    path = Path(__file__).with_name("334-reproducer.json")
+    a = ujson.loads(path.read_bytes())
+    ujson.dumps(a, indent=indent)
+
+
+@pytest.mark.skipif(
+    hasattr(sys, "pypy_version_info"), reason="PyPy uses incompatible GC"
+)
+def test_default_ref_counting():
+    class DefaultRefCountingClass:
+        def __init__(self, value):
+            self._value = value
+
+        def convert(self):
+            if self._value > 1:
+                return type(self)(self._value - 1)
+            return 0
+
+    import gc
+
+    gc.collect()
+    ujson.dumps(DefaultRefCountingClass(3), default=lambda x: x.convert())
+    assert not any(
+        type(o).__name__ == "DefaultRefCountingClass" for o in gc.get_objects()
+    )
+
+
+@pytest.mark.parametrize("sort_keys", [False, True])
+def test_obj_str_exception(sort_keys):
+    class Obj:
+        def __str__(self):
+            raise NotImplementedError
+
+    with pytest.raises(NotImplementedError):
+        ujson.dumps({Obj(): 1}, sort_keys=sort_keys)
+
+
+def no_memory_leak(func_code, n=None):
+    code = f"import functools, ujson; func = {func_code}"
+    path = os.path.join(os.path.dirname(__file__), "memory.py")
+    n = [str(n)] if n is not None else []
+    p = subprocess.run([sys.executable, path, code] + n)
+    assert p.returncode == 0
+
+
+@pytest.mark.skipif(
+    hasattr(sys, "pypy_version_info"), reason="PyPy uses incompatible GC"
+)
+@pytest.mark.parametrize("input", ['["a" * 11000, b""]'])
+def test_no_memory_leak_encoding_errors(input):
+    no_memory_leak(f"functools.partial(ujson.dumps, {input})")
+
+
+@pytest.mark.parametrize(
+    "separators, expected",
+    [
+        (None, '{"a":0,"b":1}'),
+        ((",", ":"), '{"a":0,"b":1}'),
+        ((", ", ": "), '{"a": 0, "b": 1}'),
+        # And some weird values, even though they produce invalid JSON
+        (("\u203d", "\u00a1"), '{"a"\u00a10\u203d"b"\u00a11}'),
+        (("i\x00", "k\x00"), '{"a"k\x000i\x00"b"k\x001}'),
+        (("\udc80", "\udc81"), '{"a"\udc810\udc80"b"\udc811}'),
+    ],
+)
+def test_separators(separators, expected):
+    assert ujson.dumps({"a": 0, "b": 1}, separators=separators) == expected
+
+
+@pytest.mark.parametrize(
+    "separators, expected_exception",
+    [
+        (True, TypeError),
+        (0, TypeError),
+        (b"", TypeError),
+        ((), ValueError),
+        ((",",), ValueError),
+        ((",", ":", "x"), ValueError),
+        ((True, 0), TypeError),
+        ((",", True), TypeError),
+        ((True, ":"), TypeError),
+        ((b",", b":"), TypeError),
+    ],
+)
+def test_separators_errors(separators, expected_exception):
+    with pytest.raises(expected_exception):
+        ujson.dumps({"a": 0, "b": 1}, separators=separators)
+
+
+def test_loads_bytes_like():
+    assert ujson.loads(b"123") == 123
+    if hasattr(sys, "pypy_version_info"):
+        with pytest.raises(TypeError, match="PyPy"):
+            ujson.loads(memoryview(b"{}"))
+    else:
+        assert ujson.loads(memoryview(b'["a", "b", "c"]')) == ["a", "b", "c"]
+    assert ujson.loads(bytearray(b"99")) == 99
+    assert ujson.loads('"🦄🐳"'.encode()) == "🦄🐳"
+
+
+@pytest.mark.skipif(
+    hasattr(sys, "pypy_version_info"), reason="PyPy uses incompatible GC"
+)
+def test_loads_bytes_like_refcounting():
+    import gc
+
+    gc.collect()
+    buffer = b'{"a": 99}'
+    old = sys.getrefcount(buffer)
+    assert ujson.loads(buffer) == {"a": 99}
+    assert sys.getrefcount(buffer) == old
+
+    buffer = b'{"a": invalid}'
+    old = sys.getrefcount(buffer)
+    with pytest.raises(ValueError):
+        ujson.loads(buffer)
+    assert sys.getrefcount(buffer) == old
+
+
+def test_loads_non_c_contiguous():
+    buffer = memoryview(b"".join(bytes([i]) + b"_" for i in b"[1, 2, 3]"))[::2]
+    assert not buffer.c_contiguous
+    assert ujson.loads(bytes(buffer)) == [1, 2, 3]
+    with pytest.raises(TypeError):
+        ujson.loads(buffer)
+
+
+@pytest.mark.parametrize(
+    "enum_classes, value, expected",
+    [
+        ((enum.IntEnum,), 42, "42"),
+        ((float, enum.Enum), 3.1416, "3.1416"),
+    ],
+)
+def test_enum(enum_classes, value, expected):
+    class MyEnum(*enum_classes):
+        FOO = value
+
+    assert ujson.dumps(MyEnum.FOO) == expected
+
+
+"""
+The following checks are not part of the standard test suite.
+They can be run manually as follows:
+python -c 'from tests.test_ujson import check_foo; check_foo()'
+"""
+
+
+def check_decode_decimal_no_int_overflow():
+    # Requires enough free RAM to hold a ~4GB string in memory
+    decoded = ujson.decode(r'[0.123456789,"{}"]'.format("a" * (2**32 - 5)))
+    assert decoded[0] == 0.123456789
 
 
 """
