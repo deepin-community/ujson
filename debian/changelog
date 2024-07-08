@@ -1,3 +1,9 @@
+ujson (5.8.0-1deepin1) unstable; urgency=medium
+
+  * No source change upload against python 3.12.
+
+ -- Tianyu Chen <sweetyfish@deepin.org>  Mon, 08 Jul 2024 09:58:16 +0200
+
 ujson (5.8.0-1) unstable; urgency=medium
 
   * New upstream version 5.8.0
