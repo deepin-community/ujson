@@ -1,3 +1,14 @@
+ujson (5.8.0-1deepin2) unstable; urgency=medium
+
+  * Fix CVE-2026-32874: Fix memory leak when parsing large integers.
+    Upstream:
+    https://github.com/ultrajson/ultrajson/commit/4baeb950df780092bd3c89
+    fc702a868e99a3a1d2 Security:
+    https://github.com/ultrajson/ultrajson/security/advisories/GHSA-wgvc-
+    ghv9-3pmm
+
+ -- deepin-ci-robot <packages@deepin.org>  Fri, 08 May 2026 00:10:28 +0800
+
 ujson (5.8.0-1deepin1) unstable; urgency=medium
 
   * No source change upload against python 3.12.
